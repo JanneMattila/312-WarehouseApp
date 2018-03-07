@@ -1,0 +1,231 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "warehouseAppPlanSkuName": {
+      "type": "string",
+      "allowedValues": [
+        "F1",
+        "D1",
+        "B1",
+        "B2",
+        "B3",
+        "S1",
+        "S2",
+        "S3",
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "metadata": {
+        "description": "App Service Plan's Pricing tier and instance size. Check details at https://azure.microsoft.com/en-us/pricing/details/app-service/"
+      }
+    },
+    "warehouseAppPlanCapacity": {
+      "type": "int",
+      "minValue": 1,
+      "metadata": {
+        "description": "Describes App Service Plan's instance count"
+      }
+    },
+    "databaseName": {
+      "type": "string"
+    },
+    "administratorLogin": {
+      "type": "string"
+    },
+    "administratorLoginPassword": {
+      "type": "securestring"
+    },
+    "databaseCollation": {
+      "type": "string"
+    },
+    "databaseServerEdition": {
+      "type": "string",
+      "allowedValues": [
+        "Basic",
+        "Standard",
+        "Premium"
+      ]
+    },
+    "databaseServerRequestedServiceObjectiveName": {
+      "type": "string",
+      "allowedValues": [
+        "Basic",
+        "S0",
+        "S1",
+        "S2",
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "metadata": {
+        "description": "Describes the performance level for Edition"
+      }
+    }
+  },
+  "variables": {
+    "warehouseAppPlanName": "warehouseAppServicePlan",
+    "warehouseAppName": "[concat('warehouse', uniqueString(resourceGroup().id))]",
+    "appInsightsName": "warehouseAppInsights",
+    "sqlServerName": "[concat('warehousesql', uniqueString(resourceGroup().id))]",
+    "sqlServerConnectionString": "[concat('Server=tcp:', variables('sqlServerName'), '.database.windows.net;Database=', parameters('databaseName'), ';User ID=', parameters('administratorLogin'), '@', variables('sqlServerName'), ';Password=', parameters('administratorLoginPassword'), ';Trusted_Connection=False;Encrypt=True;')]"
+  },
+  "resources": [
+    {
+      "name": "[variables('appInsightsName')]",
+      "type": "Microsoft.Insights/components",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2014-08-01",
+      "dependsOn": [],
+      "tags": {},
+      "properties": {
+        "applicationId": "[resourceId('Microsoft.Web/sites', variables('warehouseAppName'))]"
+      }
+    },
+    {
+      "name": "[variables('warehouseAppPlanName')]",
+      "type": "Microsoft.Web/serverfarms",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2016-09-01",
+      "dependsOn": [],
+      "tags": {
+        "tier": "web"
+      },
+      "sku": {
+        "name": "[parameters('warehouseAppPlanSkuName')]",
+        "capacity": "[parameters('warehouseAppPlanCapacity')]"
+      }
+    },
+    {
+      "name": "[variables('warehouseAppName')]",
+      "type": "Microsoft.Web/sites",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-08-01",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('warehouseAppPlanName'))]"
+      ],
+      "tags": {
+        "[concat('hidden-related:', resourceId('Microsoft.Web/serverfarms', variables('warehouseAppPlanName')))]": "Resource",
+        "tier": "web"
+      },
+      "properties": {
+        "name": "[variables('warehouseAppName')]",
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('warehouseAppPlanName'))]",
+        "siteConfig": {
+          "AlwaysOn": true,
+          "appSettings": [
+            {
+              "name": "APPLICATION_INSIGHTS_IKEY",
+              "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2014-04-01').InstrumentationKey]"
+            }
+          ],
+          "connectionStrings": [
+            {
+              "name": "WarehouseAppDbContext",
+              "ConnectionString": "[concat('Server=tcp:', variables('sqlServerName'), '.database.windows.net;Database=', parameters('databaseName'), ';User ID=', parameters('administratorLogin'), '@', variables('sqlServerName'), ';Password=', parameters('administratorLoginPassword'), ';Trusted_Connection=False;Encrypt=True;')]",
+              "type": "SQLAzure"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "[variables('sqlServerName')]",
+      "type": "Microsoft.Sql/servers",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2014-04-01",
+      "dependsOn": [],
+      "tags": {
+        "tier": "data"
+      },
+      "properties": {
+        "administratorLogin": "[parameters('administratorLogin')]",
+        "administratorLoginPassword": "[parameters('administratorLoginPassword')]"
+      },
+      "resources": [
+        {
+          "name": "AllowAllWindowsAzureIps",
+          "type": "firewallrules",
+          "location": "[resourceGroup().location]",
+          "apiVersion": "2014-04-01",
+          "dependsOn": [
+            "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+          ],
+          "properties": {
+            "startIpAddress": "0.0.0.0",
+            "endIpAddress": "0.0.0.0"
+          }
+        },
+        {
+          "name": "[parameters('databaseName')]",
+          "type": "databases",
+          "location": "[resourceGroup().location]",
+          "apiVersion": "2014-04-01",
+          "dependsOn": [
+            "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+          ],
+          "tags": {
+            "tier": "data"
+          },
+          "properties": {
+            "collation": "[parameters('databaseCollation')]",
+            "edition": "[parameters('databaseServerEdition')]",
+            "maxSizeBytes": "1073741824",
+            "requestedServiceObjectiveName": "[parameters('databaseServerRequestedServiceObjectiveName')]"
+          }
+        }
+      ]
+    },
+    {
+      "name": "[concat('DTU High in ', parameters('databaseName'))]",
+      "type": "Microsoft.Insights/alertrules",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2014-04-01",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), parameters('databaseName'))]"
+      ],
+      "tags": {},
+      "properties": {
+        "name": "[concat('DTU High in', parameters('databaseName'))]",
+        "description": "[concat('The average DTU is high in database ', parameters('databaseName'))]",
+        "isEnabled": true,
+        "condition": {
+          "odata.type": "Microsoft.Azure.Management.Insights.Models.ThresholdRuleCondition",
+          "dataSource": {
+            "odata.type": "Microsoft.Azure.Management.Insights.Models.RuleMetricDataSource",
+            "resourceUri": "[resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), parameters('databaseName'))]",
+            "metricName": "dtu_consumption_percent"
+          },
+          "operator": "GreaterThan",
+          "threshold": 60,
+          "windowSize": "PT5M"
+        },
+        "action": {
+          "odata.type": "Microsoft.Azure.Management.Insights.Models.RuleEmailAction",
+          "sendToServiceOwners": true,
+          "customEmails": []
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "webAppName": {
+      "type": "string",
+      "value": "[variables('warehouseAppName')]"
+    },
+    "webAppUri": {
+      "type": "string",
+      "value": "[concat('http://',reference(resourceId('Microsoft.Web/sites', variables('warehouseAppName'))).hostNames[0])]"
+    },
+    "sqlServerName": {
+      "type": "string",
+      "value": "[variables('sqlServerName')]"
+    },
+    "sqlServerConnectionString": {
+      "type": "securestring",
+      "value": "[variables('sqlServerConnectionString')]"
+    }
+  }
+}
